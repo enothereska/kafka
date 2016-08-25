@@ -47,8 +47,8 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
             "collect_default": True},
     }
 
-    def __init__(self, context, kafka, numrecs):
-        super(StreamsSimpleBenchmarkService, self).__init__(context, 1)
+    def __init__(self, context, num_nodes, kafka, numrecs):
+        super(StreamsSimpleBenchmarkService, self).__init__(context, num_nodes)
         self.kafka = kafka
         self.numrecs = numrecs
 

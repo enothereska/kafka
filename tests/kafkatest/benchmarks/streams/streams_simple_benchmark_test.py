@@ -14,26 +14,33 @@
 # limitations under the License.
 
 from ducktape.mark import ignore
-
+from ducktape.mark import parametrize
 from kafkatest.tests.kafka_test import KafkaTest
 from kafkatest.services.performance.streams_performance import StreamsSimpleBenchmarkService
 import time
 
+TOPIC = "simpleBenchmarkSourceTopic"
 class StreamsSimpleBenchmarkTest(KafkaTest):
     """
     Simple benchmark of Kafka Streams.
     """
 
     def __init__(self, test_context):
-        super(StreamsSimpleBenchmarkTest, self).__init__(test_context, num_zk=1, num_brokers=1)
+        self.topics = {
+            TOPIC: {'partitions': 9, 'replication-factor': 1}
+        }
+        super(StreamsSimpleBenchmarkTest, self).__init__(test_context, num_zk=1, num_brokers=3,
+                                                         topics=self.topics)
 
-        self.driver = StreamsSimpleBenchmarkService(test_context, self.kafka, 1000000L)
-
-    def test_simple_benchmark(self):
+        
+    @parametrize(num_nodes=1)
+    @parametrize(num_nodes=2)
+    @parametrize(num_nodes=3)
+    def test_simple_benchmark(self, num_nodes=1):
         """
         Run simple Kafka Streams benchmark
         """
-
+        self.driver = StreamsSimpleBenchmarkService(self.test_context, num_nodes, self.kafka, 1000000L)
         self.driver.start()
         self.driver.wait()
         self.driver.stop()
