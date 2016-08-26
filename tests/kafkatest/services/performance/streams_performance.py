@@ -125,3 +125,17 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
             parts = line.split(':')
             data[parts[0]] = float(parts[1])
         return data
+
+    def collect_data(self):
+        # Collect the data and return it to the framework
+        data = {}
+	index = 0
+	for node in self.nodes:
+	    output = node.account.ssh_capture("grep Performance %s" % self.STDOUT_FILE)
+            for line in output:
+                linenum = "Node " + str(index) + " " + line
+                parts = linenum.split(':')
+                data[parts[0]] = float(parts[1])
+	    index += 1
+        return data
+

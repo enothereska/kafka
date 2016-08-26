@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from pprint import pprint
 from ducktape.mark import ignore
 from ducktape.mark import parametrize
 from kafkatest.tests.kafka_test import KafkaTest
@@ -44,7 +44,6 @@ class StreamsSimpleBenchmarkTest(KafkaTest):
         self.driver.start()
         self.driver.wait()
         self.driver.stop()
-        node = self.driver.node
-        node.account.ssh("grep Performance %s" % self.driver.STDOUT_FILE, allow_fail=False)
-
-        return self.driver.collect_data(node)
+	data = self.driver.collect_data()
+	pprint(data)
+	return data
