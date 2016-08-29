@@ -47,11 +47,13 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
             "collect_default": True},
     }
 
-    def __init__(self, context, num_nodes, kafka, numrecs):
+    def __init__(self, context, num_nodes, kafka, numrecs, specific_test, waitnumrecs):
         super(StreamsSimpleBenchmarkService, self).__init__(context, num_nodes)
         self.kafka = kafka
         self.numrecs = numrecs
-
+        self.specific_test = specific_test
+        self.waitnumrecs = waitnumrecs
+        
     @property
     def node(self):
         return self.nodes[0]
@@ -68,9 +70,11 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
         sig = signal.SIGTERM if clean_shutdown else signal.SIGKILL
 
         for pid in pids:
+            self.logger.info("Kill signal process on " + str(node.account) + " on pid " + str(pid))
             node.account.signal(pid, sig, allow_fail=True)
         if clean_shutdown:
             for pid in pids:
+                self.logger.info("Kill-wait signal process on " + str(node.account) + " on pid " + str(pid))
                 wait_until(lambda: not node.account.alive(pid), timeout_sec=60, err_msg="SimpleBenchmark process on " + str(node.account) + " took too long to exit")
 
         node.account.ssh("rm -f " + self.PID_FILE, allow_fail=False)
@@ -78,18 +82,22 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
     def wait(self):
         for node in self.nodes:
             for pid in self.pids(node):
+                self.logger.info("wait()  " + str(node.account) + " on pid " + str(pid))
                 wait_until(lambda: not node.account.alive(pid), timeout_sec=600, err_msg="SimpleBenchmark process on " + str(node.account) + " took too long to exit")
 
     def clean_node(self, node):
         node.account.kill_process("streams", clean_shutdown=False, allow_fail=True)
         node.account.ssh("rm -rf " + self.PERSISTENT_ROOT, allow_fail=False)
 
-    def start_cmd(self, node):
+    def start_cmd(self, node, prepare_only):
         args = {}
         args['kafka'] = self.kafka.bootstrap_servers()
         args['zk'] = self.kafka.zk.connect_setting()
         args['state_dir'] = self.PERSISTENT_ROOT
         args['numrecs'] = self.numrecs
+        args['waitnumrecs'] = self.waitnumrecs
+        args['prepare_only'] = prepare_only;
+        args['specific_test'] = self.specific_test
         args['stdout'] = self.STDOUT_FILE
         args['stderr'] = self.STDERR_FILE
         args['pidfile'] = self.PID_FILE
@@ -98,21 +106,45 @@ class StreamsSimpleBenchmarkService(KafkaPathResolverMixin, Service):
 
         cmd = "( export KAFKA_LOG4J_OPTS=\"-Dlog4j.configuration=file:%(log4j)s\"; " \
               "INCLUDE_TEST_JARS=true %(kafka_run_class)s org.apache.kafka.streams.perf.SimpleBenchmark " \
-              " %(kafka)s %(zk)s %(state_dir)s %(numrecs)s " \
+              " %(kafka)s %(zk)s %(state_dir)s %(numrecs)s %(prepare_only)s %(specific_test)s %(waitnumrecs)s " \
               " & echo $! >&3 ) 1>> %(stdout)s 2>> %(stderr)s 3> %(pidfile)s" % args
 
         return cmd
 
+    def prepare_topic(self):
+        node = self.nodes[0]
+        self.stop_node(node)
+        self.clean_node(node)
+        node.account.ssh("mkdir -p %s" % self.PERSISTENT_ROOT, allow_fail=False)
+
+        node.account.create_file(self.LOG4J_CONFIG_FILE, self.render('tools_log4j.properties', log_file=self.LOG_FILE))
+
+        
+        results = {}
+        with node.account.monitor_log(self.STDOUT_FILE) as monitor:
+            node.account.ssh(self.start_cmd(node, "true"))
+            monitor.wait_until('SimpleBenchmark instance started', timeout_sec=15, err_msg="Never saw message indicating SimpleBenchmark finished startup on " + str(node.account))
+            self.logger.info("Starting SimpleBenchmark (prepare topics only) process on " + str(node.account) + " with pid " + str(self.pids(node)))
+
+        if len(self.pids(node)) == 0:
+            raise RuntimeError("No process ids recorded")
+        
+        for pid in self.pids(node):
+            self.logger.info("Waiting for SimpleBenchmark (prepare topics only) process on " + str(node.account) + " on pid " + str(pid))
+            wait_until(lambda: not node.account.alive(pid), timeout_sec=60, err_msg="SimpleBenchmark process on " + str(node.account) + " took too long to exit")
+            self.logger.info("Finished Waiting for SimpleBenchmark (prepare topics only) process on " + str(node.account) + " on pid " + str(pid))             
+        
     def start_node(self, node):
         node.account.ssh("mkdir -p %s" % self.PERSISTENT_ROOT, allow_fail=False)
 
         node.account.create_file(self.LOG4J_CONFIG_FILE, self.render('tools_log4j.properties', log_file=self.LOG_FILE))
 
-        self.logger.info("Starting SimpleBenchmark process on " + str(node.account))
+        
         results = {}
         with node.account.monitor_log(self.STDOUT_FILE) as monitor:
-            node.account.ssh(self.start_cmd(node))
+            node.account.ssh(self.start_cmd(node, "false"))
             monitor.wait_until('SimpleBenchmark instance started', timeout_sec=15, err_msg="Never saw message indicating SimpleBenchmark finished startup on " + str(node.account))
+            self.logger.info("Starting SimpleBenchmark process on " + str(node.account) + " with pid " + str(self.pids(node)))
 
         if len(self.pids(node)) == 0:
             raise RuntimeError("No process ids recorded")

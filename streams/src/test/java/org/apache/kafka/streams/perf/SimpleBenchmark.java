@@ -82,6 +82,9 @@ public class SimpleBenchmark {
     };
 
     private static int numRecords;
+    // waitForNumRecords usually equals numRecords. However if multiple
+    // instances are running then waitForNumRecords can be numRecords/#instances
+    private static int waitForNumRecords;
     private static Integer endKey;
     private static final int KEY_SIZE = 8;
     private static final int VALUE_SIZE = 100;
@@ -102,6 +105,10 @@ public class SimpleBenchmark {
         String zookeeper = args.length > 1 ? args[1] : "localhost:2181";
         String stateDirStr = args.length > 2 ? args[2] : "/tmp/kafka-streams-simple-benchmark";
         numRecords = args.length > 3 ? Integer.parseInt(args[3]) : 10000000;
+        boolean prepareOnly = args.length > 4 ? Boolean.parseBoolean(args[4]) : false;
+        String specificTest = args.length > 5 ? args[5] : "all";
+        waitForNumRecords = args.length > 6 ? Integer.parseInt(args[6]) : numRecords;
+
         endKey = numRecords - 1;
 
         final File stateDir = new File(stateDirStr);
@@ -115,25 +122,49 @@ public class SimpleBenchmark {
         System.out.println("zookeeper=" + zookeeper);
         System.out.println("stateDir=" + stateDir);
         System.out.println("numRecords=" + numRecords);
+        System.out.println("prepareOnly=" + prepareOnly);
+        System.out.println("specificTest=" + specificTest);
+        System.out.println("waitForNumRecords=" + waitForNumRecords);
 
         SimpleBenchmark benchmark = new SimpleBenchmark(stateDir, kafka, zookeeper);
 
         // producer performance
-        benchmark.produce(SOURCE_TOPIC, VALUE_SIZE, "simple-benchmark-produce", numRecords, true, numRecords, true);
-        // consumer performance
-        benchmark.consume(SOURCE_TOPIC);
-        // simple stream performance source->process
-        benchmark.processStream(SOURCE_TOPIC);
-        // simple stream performance source->sink
-        benchmark.processStreamWithSink(SOURCE_TOPIC);
-        // simple stream performance source->store
-        benchmark.processStreamWithStateStore(SOURCE_TOPIC);
-        // simple streams performance KSTREAM-KTABLE join
-        benchmark.kStreamKTableJoin(JOIN_TOPIC_1_PREFIX + "kStreamKTable", JOIN_TOPIC_2_PREFIX + "kStreamKTable");
-        // simple streams performance KSTREAM-KSTREAM join
-        benchmark.kStreamKStreamJoin(JOIN_TOPIC_1_PREFIX + "kStreamKStream", JOIN_TOPIC_2_PREFIX + "kStreamKStream");
-        // simple streams performance KTABLE-KTABLE join
-        benchmark.kTableKTableJoin(JOIN_TOPIC_1_PREFIX + "kTableKTable", JOIN_TOPIC_2_PREFIX + "kTableKTable");
+        switch (specificTest) {
+            case "all":
+                benchmark.produce(SOURCE_TOPIC, VALUE_SIZE, "simple-benchmark-produce", numRecords, true, numRecords, true);
+                // consumer performance
+                benchmark.consume(SOURCE_TOPIC);
+                // simple stream performance source->process
+                benchmark.processStream(SOURCE_TOPIC);
+                // simple stream performance source->sink
+                benchmark.processStreamWithSink(SOURCE_TOPIC);
+                // simple stream performance source->store
+                benchmark.processStreamWithStateStore(SOURCE_TOPIC);
+                // simple streams performance KSTREAM-KTABLE join
+                benchmark.kStreamKTableJoin(JOIN_TOPIC_1_PREFIX + "kStreamKTable", JOIN_TOPIC_2_PREFIX + "kStreamKTable", true);
+                benchmark.kStreamKTableJoin(JOIN_TOPIC_1_PREFIX + "kStreamKTable", JOIN_TOPIC_2_PREFIX + "kStreamKTable", false);
+                // simple streams performance KSTREAM-KSTREAM join
+                benchmark.kStreamKStreamJoin(JOIN_TOPIC_1_PREFIX + "kStreamKStream", JOIN_TOPIC_2_PREFIX + "kStreamKStream", true);
+                benchmark.kStreamKStreamJoin(JOIN_TOPIC_1_PREFIX + "kStreamKStream", JOIN_TOPIC_2_PREFIX + "kStreamKStream", false);
+                // simple streams performance KTABLE-KTABLE join
+                benchmark.kTableKTableJoin(JOIN_TOPIC_1_PREFIX + "kTableKTable", JOIN_TOPIC_2_PREFIX + "kTableKTable", true);
+                benchmark.kTableKTableJoin(JOIN_TOPIC_1_PREFIX + "kTableKTable", JOIN_TOPIC_2_PREFIX + "kTableKTable", false);
+                break;
+            case "kStreamKTableJoin":
+                // simple streams performance KSTREAM-KTABLE join
+                benchmark.kStreamKTableJoin(JOIN_TOPIC_1_PREFIX + "kStreamKTable", JOIN_TOPIC_2_PREFIX + "kStreamKTable", prepareOnly);
+                break;
+            case "kStreamKStreamJoin":
+                // simple streams performance KSTREAM-KSTREAM join
+                benchmark.kStreamKStreamJoin(JOIN_TOPIC_1_PREFIX + "kStreamKStream", JOIN_TOPIC_2_PREFIX + "kStreamKStream", prepareOnly);
+                break;
+            case "kTableKTableJoin":
+                // simple streams performance KTABLE-KTABLE join
+                benchmark.kTableKTableJoin(JOIN_TOPIC_1_PREFIX + "kTableKTable", JOIN_TOPIC_2_PREFIX + "kTableKTable", prepareOnly);
+                break;
+            default:
+                throw new Exception("Unknown test " + specificTest);
+        }
     }
 
     private Properties setJoinProperties(final String applicationId) {
@@ -153,15 +184,17 @@ public class SimpleBenchmark {
      * Measure the performance of a KStream-KTable left join. The setup is such that each
      * KStream record joins to exactly one element in the KTable
      */
-    public void kStreamKTableJoin(String kStreamTopic, String kTableTopic) throws Exception {
-        CountDownLatch latch = new CountDownLatch(numRecords);
+    public void kStreamKTableJoin(String kStreamTopic, String kTableTopic, boolean prepareOnly) throws Exception {
+        CountDownLatch latch = new CountDownLatch(waitForNumRecords);
 
         // initialize topics
-        System.out.println("Initializing kStreamTopic " + kStreamTopic);
-        produce(kStreamTopic, VALUE_SIZE, "simple-benchmark-produce-kstream", numRecords, false, numRecords, false);
-        System.out.println("Initializing kTableTopic " + kTableTopic);
-        produce(kTableTopic, VALUE_SIZE, "simple-benchmark-produce-ktable", numRecords, true, numRecords, false);
-
+        if (prepareOnly) {
+            System.out.println("Initializing kStreamTopic " + kStreamTopic);
+            produce(kStreamTopic, VALUE_SIZE, "simple-benchmark-produce-kstream", numRecords, false, numRecords, false);
+            System.out.println("Initializing kTableTopic " + kTableTopic);
+            produce(kTableTopic, VALUE_SIZE, "simple-benchmark-produce-ktable", numRecords, true, numRecords, false);
+            return;
+        }
         // setup join
         Properties props = setJoinProperties("simple-benchmark-kstream-ktable-join");
         final KafkaStreams streams = createKafkaStreamsKStreamKTableJoin(props, kStreamTopic, kTableTopic, latch);
@@ -174,15 +207,17 @@ public class SimpleBenchmark {
      * Measure the performance of a KStream-KStream left join. The setup is such that each
      * KStream record joins to exactly one element in the other KStream
      */
-    public void kStreamKStreamJoin(String kStreamTopic1, String kStreamTopic2) throws Exception {
-        CountDownLatch latch = new CountDownLatch(numRecords);
+    public void kStreamKStreamJoin(String kStreamTopic1, String kStreamTopic2, boolean prepareOnly) throws Exception {
+        CountDownLatch latch = new CountDownLatch(waitForNumRecords);
 
         // initialize topics
-        System.out.println("Initializing kStreamTopic " + kStreamTopic1);
-        produce(kStreamTopic1, VALUE_SIZE, "simple-benchmark-produce-kstream-topic1", numRecords, true, numRecords, false);
-        System.out.println("Initializing kStreamTopic " + kStreamTopic2);
-        produce(kStreamTopic2, VALUE_SIZE, "simple-benchmark-produce-kstream-topic2", numRecords, true, numRecords, false);
-
+        if (prepareOnly) {
+            System.out.println("Initializing kStreamTopic " + kStreamTopic1);
+            produce(kStreamTopic1, VALUE_SIZE, "simple-benchmark-produce-kstream-topic1", numRecords, true, numRecords, false);
+            System.out.println("Initializing kStreamTopic " + kStreamTopic2);
+            produce(kStreamTopic2, VALUE_SIZE, "simple-benchmark-produce-kstream-topic2", numRecords, true, numRecords, false);
+            return;
+        }
         // setup join
         Properties props = setJoinProperties("simple-benchmark-kstream-kstream-join");
         final KafkaStreams streams = createKafkaStreamsKStreamKStreamJoin(props, kStreamTopic1, kStreamTopic2, latch);
@@ -195,14 +230,17 @@ public class SimpleBenchmark {
      * Measure the performance of a KTable-KTable left join. The setup is such that each
      * KTable record joins to exactly one element in the other KTable
      */
-    public void kTableKTableJoin(String kTableTopic1, String kTableTopic2) throws Exception {
-        CountDownLatch latch = new CountDownLatch(numRecords);
+    public void kTableKTableJoin(String kTableTopic1, String kTableTopic2, boolean prepareOnly) throws Exception {
+        CountDownLatch latch = new CountDownLatch(waitForNumRecords);
 
         // initialize topics
-        System.out.println("Initializing kTableTopic " + kTableTopic1);
-        produce(kTableTopic1, VALUE_SIZE, "simple-benchmark-produce-ktable-topic1", numRecords, true, numRecords, false);
-        System.out.println("Initializing kTableTopic " + kTableTopic2);
-        produce(kTableTopic2, VALUE_SIZE, "simple-benchmark-produce-ktable-topic2", numRecords, true, numRecords, false);
+        if (prepareOnly) {
+            System.out.println("Initializing kTableTopic " + kTableTopic1);
+            produce(kTableTopic1, VALUE_SIZE, "simple-benchmark-produce-ktable-topic1", numRecords, true, numRecords, false);
+            System.out.println("Initializing kTableTopic " + kTableTopic2);
+            produce(kTableTopic2, VALUE_SIZE, "simple-benchmark-produce-ktable-topic2", numRecords, true, numRecords, false);
+            return;
+        }
 
         // setup join
         Properties props = setJoinProperties("simple-benchmark-ktable-ktable-join");
@@ -227,7 +265,7 @@ public class SimpleBenchmark {
         long endTime = System.currentTimeMillis();
 
 
-        System.out.println(nameOfBenchmark + megaBytePerSec(endTime - startTime, numRecords, KEY_SIZE + VALUE_SIZE));
+        System.out.println(nameOfBenchmark + megaBytePerSec(endTime - startTime, waitForNumRecords, KEY_SIZE + VALUE_SIZE));
 
         streams.close();
     }
